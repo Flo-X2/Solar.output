@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="theme-color" content="#020b18"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Solar Forecast"/>
+  <title>Solar Yield Forecast</title>
+  <script>
+    const manifest = {
+      name:"Solar Yield Forecast", short_name:"SolarCast",
+      start_url:".", display:"standalone",
+      background_color:"#020b18", theme_color:"#020b18",
+      icons:[{src:"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23f59e0b'/><text y='.9em' font-size='80' x='10'>☀</text></svg>",sizes:"any",type:"image/svg+xml"}]
+    };
+    const b=new Blob([JSON.stringify(manifest)],{type:"application/json"});
+    const l=document.createElement("link"); l.rel="manifest"; l.href=URL.createObjectURL(b);
+    document.currentScript.after(l);
+  </script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;background:#020b18;font-family:-apple-system,system-ui,sans-serif;color:#f1f5f9}
+    #root{min-height:100%;padding-bottom:48px}
+    input,button{font-family:inherit}
+    input[type=text]::placeholder{color:#475569}
+    input[type=text]:focus{outline:none;border-color:#334155!important}
+    .spinner{display:inline-block;animation:spin 1.2s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    /* Range slider styling */
+    input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:36px;background:transparent;cursor:pointer;outline:none}
+    input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:999px;background:#1e293b}
+    input[type=range].amber::-webkit-slider-runnable-track{background:linear-gradient(90deg,#f59e0b,#f59e0b) no-repeat,#1e293b}
+    input[type=range].blue::-webkit-slider-runnable-track{background:linear-gradient(90deg,#60a5fa,#60a5fa) no-repeat,#1e293b}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:28px;height:28px;border-radius:50%;margin-top:-11px;box-shadow:0 2px 8px rgba(0,0,0,0.5)}
+    input[type=range].amber::-webkit-slider-thumb{background:#f59e0b}
+    input[type=range].blue::-webkit-slider-thumb{background:#60a5fa}
+    /* Suggestions dropdown */
+    .suggestions{position:absolute;left:0;right:0;top:100%;background:#0f172a;border:1px solid #1e293b;border-top:none;border-radius:0 0 10px 10px;z-index:100;max-height:200px;overflow-y:auto}
+    .suggestion{padding:11px 14px;font-size:13px;color:#cbd5e1;cursor:pointer;border-bottom:1px solid #1e293b}
+    .suggestion:last-child{border-bottom:none}
+    .suggestion:active,.suggestion:hover{background:#1e293b}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const TEMP_COEFF = -0.004;
+
+function calcOutput(ghi, temp, panelKw, inverterKw) {
+  const base = panelKw * (ghi / 1000);
+  return Math.min(Math.max(base * (1 + TEMP_COEFF * (temp - 25)), 0), inverterKw);
+}
+
+function skyLabel(ghi) {
+  if (ghi >= 700) return {label:"Clear sky",        color:"#f59e0b"};
+  if (ghi >= 400) return {label:"Partly cloudy",    color:"#84cc16"};
+  if (ghi >= 150) return {label:"Overcast",         color:"#94a3b8"};
+  if (ghi >= 50)  return {label:"Heavy cloud/Rain", color:"#64748b"};
+  return             {label:"Storm/Night",       color:"#334155"};
+}
+
+// ── Open-Meteo geocoding (CORS: * — works from file://) ───────────────────
+async function searchGeo(query) {
+  const url = "https://geocoding-api.open-meteo.com/v1/search?name=" +
+    encodeURIComponent(query) + "&count=5&language=en&format=json";
+  const r = await fetch(url);
+  const d = await r.json();
+  return (d.results || []).map(x => ({
+    name:     x.name + (x.admin1 ? ", " + x.admin1 : "") + ", " + x.country,
+    lat:      x.latitude,
+    lon:      x.longitude,
+    tz:       x.timezone
+  }));
+}
+
+// ── Open-Meteo forecast (CORS: * — works from file://) ────────────────────
+async function fetchOpenMeteo(lat, lon, tz) {
+  const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
+    "&longitude=" + lon +
+    "&hourly=shortwave_radiation,temperature_2m" +
+    "&forecast_days=2&timezone=" + encodeURIComponent(tz);
+  const r = await fetch(url);
+  return r.json();
+}
+
+// ── SVG chart ─────────────────────────────────────────────────────────────
+function svgChart(data, inverterKw) {
+  if (!data.length) return "";
+  const W=340,H=160,PL=40,PR=12,PT=10,PB=24;
+  const cw=W-PL-PR, ch=H-PT-PB;
+  const n=data.length;
+  const px=i=>PL+(i/(n-1))*cw;
+  const py=v=>PT+ch-(v/inverterKw)*ch;
+
+  let area="M"+px(0)+","+py(data[0].output);
+  let line="M"+px(0)+","+py(data[0].output);
+  for(let i=1;i<n;i++){
+    area+=" L"+px(i)+","+py(data[i].output);
+    line+=" L"+px(i)+","+py(data[i].output);
+  }
+  area+=" L"+px(n-1)+","+(PT+ch)+" L"+px(0)+","+(PT+ch)+" Z";
+
+  const yVals=[0,0.25,0.5,0.75,1].map(f=>({v:f*inverterKw,y:py(f*inverterKw)}));
+  const xTicks=data.reduce((a,d,i)=>{if(parseInt(d.time)%3===0)a.push({i,label:d.time});return a;},[]);
+
+  let svg=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">
+  <defs><linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.4"/>
+    <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
+  </linearGradient></defs>`;
+
+  yVals.forEach(t=>{
+    svg+=`<line x1="${PL}" y1="${t.y}" x2="${PL+cw}" y2="${t.y}" stroke="#1e293b" stroke-width="0.5"/>`;
+    svg+=`<text x="${PL-4}" y="${t.y+3}" text-anchor="end" font-size="8" fill="#475569">${t.v.toFixed(0)}kW</text>`;
+  });
+  xTicks.forEach(t=>{
+    svg+=`<text x="${px(t.i)}" y="${PT+ch+13}" text-anchor="middle" font-size="8" fill="#475569">${t.label}</text>`;
+  });
+
+  const refY=py(inverterKw);
+  svg+=`<line x1="${PL}" y1="${refY}" x2="${PL+cw}" y2="${refY}" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>`;
+  svg+=`<text x="${PL+cw-2}" y="${refY-3}" text-anchor="end" font-size="7" fill="#f59e0b" opacity="0.6">max</text>`;
+  svg+=`<path d="${area}" fill="url(#ag)"/>`;
+  svg+=`<path d="${line}" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linejoin="round"/>`;
+  svg+=`</svg>`;
+  return svg;
+}
+
+// ── State ─────────────────────────────────────────────────────────────────
+let state = {
+  locInput:"", locName:"", suggestions:[],
+  panelKw:11, inverterKw:12, showConfig:false,
+  data:[], summary:null,
+  loading:false, geoLoading:false, error:"",
+  installPrompt:null
+};
+function setState(patch){ state={...state,...patch}; render(); }
+
+window.addEventListener("beforeinstallprompt", e=>{
+  e.preventDefault(); setState({installPrompt:e});
+});
+
+// ── Data ──────────────────────────────────────────────────────────────────
+function processForecast(json, tz, pKw, iKw) {
+  const times=json.hourly.time, ghiArr=json.hourly.shortwave_radiation, tempArr=json.hourly.temperature_2m;
+  const now=new Date();
+  const fmtDate=d=>new Intl.DateTimeFormat("en-CA",{timeZone:tz}).format(d);
+  const todayStr=fmtDate(now), tomorrowStr=fmtDate(new Date(now.getTime()+86400000));
+  const curHour=parseInt(new Intl.DateTimeFormat("en-GB",{timeZone:tz,hour:"numeric",hour12:false}).format(now));
+
+  let todayKwh=0,tomorrowKwh=0,peakOutput=0,peakHour="";
+  const points=times.map((t,i)=>{
+    const date=t.slice(0,10),hour=t.slice(11,16);
+    const output=calcOutput(ghiArr[i],tempArr[i],pKw,iKw);
+    if(date===todayStr)    todayKwh+=output;
+    if(date===tomorrowStr) tomorrowKwh+=output;
+    if(output>peakOutput){ peakOutput=output; peakHour=hour; }
+    return {time:hour,date,output:parseFloat(output.toFixed(3)),ghi:Math.round(ghiArr[i]),temp:Math.round(tempArr[i]),label:date.slice(5)+" "+hour};
+  }).filter(p=>{
+    if(p.date===todayStr)    return parseInt(p.time)>=curHour;
+    if(p.date===tomorrowStr) return true;
+    return false;
+  });
+
+  setState({data:points, summary:{todayKwh:todayKwh.toFixed(1),tomorrowKwh:tomorrowKwh.toFixed(1),peakOutput:peakOutput.toFixed(2),peakHour}, loading:false});
+}
+
+async function loadForecast(lat, lon, tz, pKw, iKw) {
+  setState({loading:true, error:"", summary:null, data:[]});
+  try {
+    const json = await fetchOpenMeteo(lat, lon, tz);
+    processForecast(json, tz, pKw, iKw);
+  } catch(e) {
+    setState({loading:false, error:"Forecast error: "+e.message+" | "+e.name+" | url:"+e.stack?.slice(0,80)});
+  }
+}
+
+let geoTimer=null;
+
+// Read input value directly from DOM — never re-render on keystroke
+function getInputVal() {
+  const inp = document.getElementById("loc-input");
+  return inp ? inp.value : state.locInput;
+}
+
+function updateSuggestions(results) {
+  // Only re-render the suggestions box, not the whole page
+  state.suggestions = results;
+  const box = document.getElementById("suggestions-box");
+  if (!box) return;
+  box.innerHTML = "";
+  results.forEach(s => {
+    const d = document.createElement("div");
+    d.className = "suggestion";
+    d.textContent = s.name;
+    d.onclick = () => selectSuggestion(s);
+    box.appendChild(d);
+  });
+  box.style.display = results.length ? "block" : "none";
+}
+
+function onLocInput(val) {
+  state.locInput = val;
+  clearTimeout(geoTimer);
+  // Hide suggestions if too short
+  updateSuggestions([]);
+  if (val.trim().length < 2) return;
+  geoTimer = setTimeout(async () => {
+    try {
+      const results = await searchGeo(val);
+      updateSuggestions(results);
+    } catch {}
+  }, 500);
+}
+
+function selectSuggestion(s) {
+  const inp = document.getElementById("loc-input");
+  if (inp) inp.value = s.name;
+  state.locInput = s.name;
+  setState({locName:s.name, suggestions:[]});
+  loadForecast(s.lat, s.lon, s.tz, state.panelKw, state.inverterKw);
+}
+
+async function doSearch() {
+  const val = getInputVal().trim();
+  if (!val) return;
+  setState({geoLoading:true, error:"", suggestions:[]});
+  try {
+    const results = await searchGeo(val);
+    if (!results.length) throw new Error("Location not found");
+    const s = results[0];
+    const inp = document.getElementById("loc-input");
+    if (inp) inp.value = s.name;
+    state.locInput = s.name;
+    setState({locName:s.name, geoLoading:false});
+    loadForecast(s.lat, s.lon, s.tz, state.panelKw, state.inverterKw);
+  } catch(e) {
+    setState({geoLoading:false, error:e.message});
+  }
+}
+
+function geoLocate() {
+  setState({geoLoading:true, error:""});
+  navigator.geolocation.getCurrentPosition(async ({coords:{latitude:lat,longitude:lon}})=>{
+    try {
+      // Reverse geocode by searching nearby — use lat/lon directly for forecast
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      setState({locName:"Your location", locInput:"Your location", geoLoading:false});
+      loadForecast(lat, lon, tz, state.panelKw, state.inverterKw);
+    } catch(e) {
+      setState({geoLoading:false, error:"GPS error: "+e.message});
+    }
+  }, ()=>setState({geoLoading:false, error:"Location access denied."}));
+}
+
+// ── DOM helpers ───────────────────────────────────────────────────────────
+function el(tag, attrs, ...children) {
+  const e=document.createElement(tag);
+  if(attrs) Object.entries(attrs).forEach(([k,v])=>{
+    if(k==="style"&&typeof v==="object") Object.assign(e.style,v);
+    else if(k.startsWith("on")) e.addEventListener(k.slice(2).toLowerCase(),v);
+    else if(k==="html") e.innerHTML=v;
+    else if(k==="class") e.className=v;
+    else e.setAttribute(k,v);
+  });
+  children.flat(Infinity).forEach(c=>{if(c!=null&&c!==false)e.append(typeof c==="string"||typeof c==="number"?document.createTextNode(c):c);});
+  return e;
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function render() {
+  const {locInput,locName,suggestions,panelKw,inverterKw,showConfig,data,summary,loading,geoLoading,error,installPrompt}=state;
+  const todayStr=data.length?data[0].date:"";
+  const ratio=(panelKw/inverterKw).toFixed(2);
+  const ratioOk=panelKw/inverterKw<=1.25&&panelKw/inverterKw>=0.8;
+  const ratioNote=panelKw/inverterKw>1.25?"⚠ clipping likely":panelKw/inverterKw<0.8?"⚠ inverter oversized":"✓ good";
+  const root=document.getElementById("root");
+  root.innerHTML="";
+
+  // ── Header
+  root.append(el("div",{style:{borderBottom:"1px solid #1e293b",padding:"18px 20px 14px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+    el("div",{style:{display:"flex",alignItems:"center",gap:10}},
+      el("div",{style:{width:34,height:34,borderRadius:10,background:"linear-gradient(135deg,#f59e0b,#f97316)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}},"☀"),
+      el("div",null,
+        el("div",{style:{fontWeight:700,fontSize:16}},"Solar Yield Forecast"),
+        el("div",{style:{color:"#64748b",fontSize:11,marginTop:2}},
+          panelKw+" kW panels · "+inverterKw+" kW inverter · ",
+          (()=>{const s=el("span",{style:{color:"#60a5fa",cursor:"pointer"}},"edit");s.onclick=()=>setState({showConfig:!showConfig});return s;})()
+        )
+      )
+    ),
+    navigator.share
+      ?(()=>{const b=el("button",{style:{background:"none",border:"none",color:"#475569",fontSize:20,padding:"4px 8px"}},"⬆");b.onclick=()=>navigator.share({title:"Solar Yield Forecast",url:window.location.href});return b;})()
+      :el("span")
+  ));
+
+  // ── Config panel
+  if(showConfig){
+    root.append(el("div",{style:{margin:"12px 20px 0",background:"#0f172a",border:"1px solid #1e293b",borderRadius:14,padding:"18px"}},
+      el("div",{style:{fontSize:11,color:"#64748b",marginBottom:16,textTransform:"uppercase",letterSpacing:"0.08em"}},"System Configuration"),
+      ...[
+        {label:"Solar panels",unit:"kW DC",val:panelKw,key:"panelKw",cls:"amber",color:"#f59e0b"},
+        {label:"Inverter",    unit:"kW AC",val:inverterKw,key:"inverterKw",cls:"blue",color:"#60a5fa"},
+      ].map(f=>{
+        const inp=document.createElement("input");
+        inp.type="range"; inp.min=0.5; inp.max=30; inp.step=0.5; inp.value=f.val; inp.className=f.cls;
+        inp.oninput=e=>setState({[f.key]:parseFloat(e.target.value)});
+        return el("div",{style:{marginBottom:16}},
+          el("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:2}},
+            el("div",{style:{fontSize:13,color:"#94a3b8"}}                    ,f.label),
+            el("div",{style:{fontSize:22,fontWeight:800,color:f.color,letterSpacing:"-0.5px"}},
+              f.val,el("span",{style:{fontSize:12,color:"#64748b",marginLeft:3}},f.unit))
+          ),
+          inp
+        );
+      }),
+      el("div",{style:{borderTop:"1px solid #1e293b",paddingTop:12,fontSize:11,color:ratioOk?"#34d399":"#fbbf24"}},"DC:AC ratio: "+ratio+" — "+ratioNote)
+    ));
+  }
+
+  // ── Location input
+  const locWrap=el("div",{style:{padding:"18px 20px 0"}},
+    el("div",{style:{fontSize:11,color:"#64748b",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}},"Location"),
+    el("div",{style:{position:"relative"}},
+      el("div",{style:{display:"flex",gap:8}},
+        (()=>{
+          const inp=el("input",{style:{flex:1,background:"#0f172a",border:"1px solid #1e293b",borderRadius:10,color:"#f1f5f9",padding:"11px 14px",fontSize:14},placeholder:"Enter city…"});
+          inp.type="text"; inp.id="loc-input"; inp.value=locInput;
+          inp.oninput=e=>onLocInput(e.target.value);
+          inp.onkeydown=e=>{if(e.key==="Enter"){e.target.blur();doSearch();}};
+          return inp;
+        })(),
+        (()=>{const b=el("button",{style:{background:"#1e3a5f",border:"none",borderRadius:10,color:"#93c5fd",padding:"0 16px",fontSize:13,fontWeight:600,minWidth:64}},geoLoading?"…":"Search");b.onclick=doSearch;b.disabled=geoLoading||loading;return b;})(),
+        (()=>{const b=el("button",{style:{background:"#0f172a",border:"1px solid #1e293b",borderRadius:10,color:"#94a3b8",padding:"0 14px",fontSize:18}},"⌖");b.onclick=geoLocate;b.disabled=geoLoading||loading;return b;})()
+      ),
+      // Suggestions dropdown
+      el("div",{class:"suggestions",style:{display:suggestions.length?"block":"none"},"id":"suggestions-box"},
+        ...suggestions.map(s=>{
+          const d=el("div",{class:"suggestion"},s.name);
+          d.onclick=()=>selectSuggestion(s);
+          return d;
+        })
+      )
+    )
+  );
+  if(error) locWrap.append(el("div",{style:{color:"#f87171",fontSize:12,marginTop:8}},error));
+  root.append(locWrap);
+
+  // ── Loading
+  if(loading||geoLoading){
+    root.append(el("div",{style:{textAlign:"center",padding:"60px 0",color:"#475569"}},
+      el("div",{class:"spinner",style:{fontSize:28,display:"block",marginBottom:12}},"◌"),
+      el("div",{style:{fontSize:13}},geoLoading?"Finding location…":"Fetching forecast…")
+    ));
+  }
+
+  // ── Results
+  if(summary&&!loading){
+    root.append(el("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,padding:"16px 20px 0"}},
+      ...[
+        {label:"Today",    val:summary.todayKwh,    unit:"kWh",             icon:"⚡",color:"#f59e0b"},
+        {label:"Tomorrow", val:summary.tomorrowKwh, unit:"kWh",             icon:"📅",color:"#60a5fa"},
+        {label:"Peak",     val:summary.peakOutput,  unit:summary.peakHour,  icon:"🔆",color:"#34d399"},
+      ].map(c=>el("div",{style:{background:"#0f172a",border:"1px solid #1e293b",borderRadius:14,padding:"14px 12px"}},
+        el("div",{style:{fontSize:16,marginBottom:4}},c.icon),
+        el("div",{style:{fontSize:20,fontWeight:800,color:c.color,letterSpacing:"-0.5px"}},c.val),
+        el("div",{style:{fontSize:10,color:"#64748b",marginTop:1}},c.unit),
+        el("div",{style:{fontSize:10,color:"#475569",marginTop:2}},c.label)
+      ))
+    ));
+
+    if(parseFloat(summary.peakOutput)>=inverterKw-0.1){
+      root.append(el("div",{style:{margin:"10px 20px 0",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#fbbf24"}},
+        "⚡ Inverter clipping — "+inverterKw+" kW limit reached at peak sun."));
+    }
+
+    const todayData=data.filter(d=>d.date===todayStr);
+    if(todayData.length){
+      root.append(el("div",{style:{padding:"18px 20px 0"}},
+        el("div",{style:{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}},"Hourly output — "+locName),
+        el("div",{style:{background:"#0a1628",border:"1px solid #1e293b",borderRadius:16,padding:"14px 10px 8px",overflowX:"hidden"}},
+          el("div",{html:svgChart(todayData,inverterKw)})
+        )
+      ));
+    }
+
+    root.append(el("div",{style:{padding:"18px 20px 0"}},
+      el("div",{style:{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}},"Hour-by-hour · today"),
+      el("div",{style:{background:"#0a1628",border:"1px solid #1e293b",borderRadius:14,overflow:"hidden"}},
+        ...data.filter(d=>d.date===todayStr).map((d,i)=>{
+          const sky=skyLabel(d.ghi);
+          const pct=Math.min(100,(d.output/inverterKw)*100);
+          return el("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderBottom:"1px solid #0f172a"}},
+            el("div",{style:{width:36,color:"#64748b",fontSize:11,flexShrink:0}},d.time),
+            el("div",{style:{flex:1}},
+              el("div",{style:{height:5,background:"#1e293b",borderRadius:999,overflow:"hidden"}},
+                el("div",{style:{width:pct+"%",height:"100%",borderRadius:999,background:"linear-gradient(90deg,"+sky.color+",#f59e0b)"}})
+              )
+            ),
+            el("div",{style:{width:54,textAlign:"right",fontSize:12,fontWeight:700,color:"#f1f5f9",flexShrink:0}},d.output.toFixed(2)+" kW"),
+            el("div",{style:{width:76,fontSize:9,color:sky.color,textAlign:"right",flexShrink:0}},sky.label)
+          );
+        })
+      )
+    ));
+
+    root.append(el("div",{style:{padding:"10px 20px 0",fontSize:10,color:"#334155"}},"Data via Open-Meteo · adjusted for temp & inverter clipping"));
+  }
+
+  // ── Install banner
+  if(installPrompt){
+    root.append(el("div",{style:{margin:"16px 20px 0",background:"rgba(96,165,250,0.08)",border:"1px solid rgba(96,165,250,0.2)",borderRadius:12,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+      el("div",null,
+        el("div",{style:{fontSize:13,fontWeight:600,color:"#93c5fd"}},"📲 Install as app"),
+        el("div",{style:{fontSize:11,color:"#475569",marginTop:2}},"Add to home screen for quick access")
+      ),
+      (()=>{const b=el("button",{style:{background:"#1e3a5f",border:"none",borderRadius:8,color:"#93c5fd",padding:"8px 14px",fontSize:12,fontWeight:600}},"Install");b.onclick=async()=>{installPrompt.prompt();const{outcome}=await installPrompt.userChoice;if(outcome==="accepted")setState({installPrompt:null});};return b;})()
+    ));
+  }
+
+  // ── Empty state
+  if(!loading&&!geoLoading&&!summary){
+    root.append(el("div",{style:{textAlign:"center",padding:"70px 20px",color:"#334155"}},
+      el("div",{style:{fontSize:52,marginBottom:16}},"☀"),
+      el("div",{style:{fontSize:16,color:"#475569",fontWeight:600}},"Enter your location"),
+      el("div",{style:{fontSize:12,marginTop:6,color:"#334155",lineHeight:"1.6"}},"Set your system size, then search your city for a live hourly solar yield forecast.")
+    ));
+  }
+}
+
+render();
+</script>
+</body>
+</html>
