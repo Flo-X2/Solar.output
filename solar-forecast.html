@@ -419,16 +419,15 @@ function render() {
       modelBar.append(btn);
     });
 
-    // TWC link
-    if (locName) {
-      const twcName = locName.split(",")[0].trim().toLowerCase().replace(/ /g,"-");
+    // The Weather Channel link using coordinates
+    if (locName && state.lastLat && state.lastLon) {
       const twcBtn = el("a",{
-        href: "https://weather.com/weather/hourbyhour/l/" + twcName + "-new-zealand",
+        href: "https://weather.com/weather/hourbyhour/l/" + state.lastLat.toFixed(2) + "," + state.lastLon.toFixed(2),
         target:"_blank",
         style:{marginLeft:"auto", background:"#0f172a", border:"1px solid #1e293b",
                borderRadius:8, color:"#94a3b8", padding:"6px 10px", fontSize:11,
                textDecoration:"none", display:"flex", alignItems:"center", gap:4}
-      }, "🌐 TWC Hourly");
+      }, "🌐 The Weather Channel");
       modelBar.append(twcBtn);
     }
     root.append(modelBar);
