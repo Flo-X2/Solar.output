@@ -64,37 +64,48 @@ function skyLabel(ghi) {
 
 // ── Open-Meteo geocoding (CORS: * — works from file://) ───────────────────
 async function searchGeo(query) {
-  const url = "https://geocoding-api.open-meteo.com/v1/search?name=" +
-    encodeURIComponent(query) + "&count=5&language=en&format=json";
-  const r = await fetch(url);
-  const d = await r.json();
-  return (d.results || []).map(x => ({
-    name:     x.name + (x.admin1 ? ", " + x.admin1 : "") + ", " + x.country,
-    lat:      x.latitude,
-    lon:      x.longitude,
-    tz:       x.timezone
-  }));
+  // Try full query first, then fall back to first word/part
+  const attempts = [query.trim(), query.split(",")[0].trim()];
+  for (const term of attempts) {
+    const url = "https://geocoding-api.open-meteo.com/v1/search?name=" +
+      encodeURIComponent(term) + "&count=5&language=en&format=json";
+    const r = await fetch(url);
+    const d = await r.json();
+    if (d.results && d.results.length) {
+      return d.results.map(x => ({
+        name: x.name + (x.admin1 ? ", " + x.admin1 : "") + ", " + x.country,
+        lat:  x.latitude,
+        lon:  x.longitude,
+        tz:   x.timezone
+      }));
+    }
+  }
+  return [];
 }
 
-// ── Open-Meteo forecast (CORS: * — works from file://) ────────────────────
 async function fetchOpenMeteo(lat, lon, tz) {
   const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
     "&longitude=" + lon +
     "&hourly=shortwave_radiation,temperature_2m" +
     "&forecast_days=2&timezone=" + encodeURIComponent(tz);
   const r = await fetch(url);
-  return r.json();
+  const d = await r.json();
+  return {
+    tz:   d.timezone,
+    time: d.hourly.time,
+    ghi:  d.hourly.shortwave_radiation,
+    temp: d.hourly.temperature_2m
+  };
 }
 
-// ── SVG chart ─────────────────────────────────────────────────────────────
+// ── SVG Chart ─────────────────────────────────────────────────────────────
 function svgChart(data, inverterKw) {
-  if (!data.length) return "";
+  if (!data || !data.length) return "";
   const W=340,H=160,PL=40,PR=12,PT=10,PB=24;
   const cw=W-PL-PR, ch=H-PT-PB;
   const n=data.length;
   const px=i=>PL+(i/(n-1))*cw;
-  const py=v=>PT+ch-(v/inverterKw)*ch;
-
+  const py=v=>PT+ch-(Math.min(v,inverterKw)/inverterKw)*ch;
   let area="M"+px(0)+","+py(data[0].output);
   let line="M"+px(0)+","+py(data[0].output);
   for(let i=1;i<n;i++){
@@ -102,24 +113,20 @@ function svgChart(data, inverterKw) {
     line+=" L"+px(i)+","+py(data[i].output);
   }
   area+=" L"+px(n-1)+","+(PT+ch)+" L"+px(0)+","+(PT+ch)+" Z";
-
-  const yVals=[0,0.25,0.5,0.75,1].map(f=>({v:f*inverterKw,y:py(f*inverterKw)}));
+  const yVals=[0,0.25,0.5,0.75,1].map(f=>({v:parseFloat((f*inverterKw).toFixed(1)),y:py(f*inverterKw)}));
   const xTicks=data.reduce((a,d,i)=>{if(parseInt(d.time)%3===0)a.push({i,label:d.time});return a;},[]);
-
   let svg=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">
   <defs><linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
     <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.4"/>
     <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
   </linearGradient></defs>`;
-
   yVals.forEach(t=>{
     svg+=`<line x1="${PL}" y1="${t.y}" x2="${PL+cw}" y2="${t.y}" stroke="#1e293b" stroke-width="0.5"/>`;
-    svg+=`<text x="${PL-4}" y="${t.y+3}" text-anchor="end" font-size="8" fill="#475569">${t.v.toFixed(0)}kW</text>`;
+    svg+=`<text x="${PL-4}" y="${t.y+3}" text-anchor="end" font-size="8" fill="#475569">${t.v}kW</text>`;
   });
   xTicks.forEach(t=>{
     svg+=`<text x="${px(t.i)}" y="${PT+ch+13}" text-anchor="middle" font-size="8" fill="#475569">${t.label}</text>`;
   });
-
   const refY=py(inverterKw);
   svg+=`<line x1="${PL}" y1="${refY}" x2="${PL+cw}" y2="${refY}" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>`;
   svg+=`<text x="${PL+cw-2}" y="${refY-3}" text-anchor="end" font-size="7" fill="#f59e0b" opacity="0.6">max</text>`;
@@ -145,7 +152,11 @@ window.addEventListener("beforeinstallprompt", e=>{
 
 // ── Data ──────────────────────────────────────────────────────────────────
 function processForecast(json, tz, pKw, iKw) {
-  const times=json.hourly.time, ghiArr=json.hourly.shortwave_radiation, tempArr=json.hourly.temperature_2m;
+  // Support both flat {time,ghi,temp} and nested {hourly:{time,...}} shapes
+  const times   = json.time   || (json.hourly && json.hourly.time);
+  const ghiArr  = json.ghi    || (json.hourly && json.hourly.shortwave_radiation);
+  const tempArr = json.temp   || (json.hourly && json.hourly.temperature_2m);
+  if (!times || !ghiArr || !tempArr) throw new Error("Invalid forecast data shape");
   const now=new Date();
   const fmtDate=d=>new Intl.DateTimeFormat("en-CA",{timeZone:tz}).format(d);
   const todayStr=fmtDate(now), tomorrowStr=fmtDate(new Date(now.getTime()+86400000));
@@ -172,9 +183,9 @@ async function loadForecast(lat, lon, tz, pKw, iKw) {
   setState({loading:true, error:"", summary:null, data:[]});
   try {
     const json = await fetchOpenMeteo(lat, lon, tz);
-    processForecast(json, tz, pKw, iKw);
+    processForecast(json, json.tz || tz, pKw, iKw);
   } catch(e) {
-    setState({loading:false, error:"Forecast error: "+e.message+" | "+e.name+" | url:"+e.stack?.slice(0,80)});
+    setState({loading:false, error:"Forecast error: "+e.message});
   }
 }
 
@@ -220,6 +231,8 @@ function selectSuggestion(s) {
   const inp = document.getElementById("loc-input");
   if (inp) inp.value = s.name;
   state.locInput = s.name;
+  state.suggestions = [];
+  // Use coordinates directly from suggestion — no re-search needed
   setState({locName:s.name, suggestions:[]});
   loadForecast(s.lat, s.lon, s.tz, state.panelKw, state.inverterKw);
 }
