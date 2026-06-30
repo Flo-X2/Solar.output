@@ -83,11 +83,12 @@ async function searchGeo(query) {
   return [];
 }
 
-async function fetchOpenMeteo(lat, lon, tz) {
+async function fetchOpenMeteo(lat, lon, tz, model) {
   const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
     "&longitude=" + lon +
     "&hourly=shortwave_radiation,temperature_2m" +
-    "&forecast_days=2&timezone=" + encodeURIComponent(tz);
+    "&forecast_days=2&timezone=" + encodeURIComponent(tz) +
+    "&models=" + (model || "gfs_seamless");
   const r = await fetch(url);
   const d = await r.json();
   return {
@@ -138,7 +139,7 @@ function svgChart(data, inverterKw) {
 
 // ── State ─────────────────────────────────────────────────────────────────
 let state = {
-  locInput:"", locName:"", suggestions:[],
+  locInput:"", locName:"", suggestions:[], model:"gem_seamless",
   panelKw:11, inverterKw:12, showConfig:false,
   data:[], summary:null,
   loading:false, geoLoading:false, error:"",
@@ -180,9 +181,10 @@ function processForecast(json, tz, pKw, iKw) {
 }
 
 async function loadForecast(lat, lon, tz, pKw, iKw) {
+  state.lastLat=lat; state.lastLon=lon; state.lastTz=tz;
   setState({loading:true, error:"", summary:null, data:[]});
   try {
-    const json = await fetchOpenMeteo(lat, lon, tz);
+    const json = await fetchOpenMeteo(lat, lon, tz, state.model);
     processForecast(json, json.tz || tz, pKw, iKw);
   } catch(e) {
     setState({loading:false, error:"Forecast error: "+e.message});
@@ -389,6 +391,47 @@ function render() {
       root.append(el("div",{style:{margin:"10px 20px 0",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#fbbf24"}},
         "⚡ Inverter clipping — "+inverterKw+" kW limit reached at peak sun."));
     }
+
+    // Model selector + TWC link
+    const modelBar = el("div",{style:{padding:"0 20px 0",marginTop:16,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}});
+    const models = [
+      {id:"gfs_seamless",    label:"GFS",  sub:"American"},
+      {id:"gem_seamless",    label:"GEM",  sub:"Canadian"},
+      {id:"ecmwf_ifs025",   label:"ECMWF",sub:"European"},
+      {id:"icon_seamless",   label:"ICON", sub:"German"},
+    ];
+    models.forEach(m => {
+      const active = state.model === m.id;
+      const btn = el("button",{style:{
+        background: active ? "#1e3a5f" : "#0f172a",
+        border: active ? "1px solid #60a5fa" : "1px solid #1e293b",
+        borderRadius:8, color: active ? "#93c5fd" : "#64748b",
+        padding:"6px 10px", fontSize:11, cursor:"pointer",
+        display:"flex", flexDirection:"column", alignItems:"center", gap:1
+      }},
+        el("span",{style:{fontWeight:700}}, m.label),
+        el("span",{style:{fontSize:9, opacity:0.7}}, m.sub)
+      );
+      btn.onclick = () => {
+        setState({model: m.id});
+        if (state.locName) loadForecast(state.lastLat, state.lastLon, state.lastTz, state.panelKw, state.inverterKw);
+      };
+      modelBar.append(btn);
+    });
+
+    // TWC link
+    if (locName) {
+      const twcName = locName.split(",")[0].trim().toLowerCase().replace(/ /g,"-");
+      const twcBtn = el("a",{
+        href: "https://weather.com/weather/hourbyhour/l/" + twcName + "-new-zealand",
+        target:"_blank",
+        style:{marginLeft:"auto", background:"#0f172a", border:"1px solid #1e293b",
+               borderRadius:8, color:"#94a3b8", padding:"6px 10px", fontSize:11,
+               textDecoration:"none", display:"flex", alignItems:"center", gap:4}
+      }, "🌐 TWC Hourly");
+      modelBar.append(twcBtn);
+    }
+    root.append(modelBar);
 
     const todayData=data.filter(d=>d.date===todayStr);
     if(todayData.length){
