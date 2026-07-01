@@ -422,7 +422,7 @@ function render() {
     // The Weather Channel link using coordinates
     if (locName && state.lastLat && state.lastLon) {
       const twcBtn = el("a",{
-        href: "https://weather.com/weather/hourbyhour/l/" + state.lastLat.toFixed(2) + "," + state.lastLon.toFixed(2),
+        href: "https://weather.com/weather/hourbyhour/l/" + state.lastLat.toFixed(2) + "," + state.lastLon.toFixed(2) + "?unit=m",
         target:"_blank",
         style:{marginLeft:"auto", background:"#0f172a", border:"1px solid #1e293b",
                borderRadius:8, color:"#94a3b8", padding:"6px 10px", fontSize:11,
