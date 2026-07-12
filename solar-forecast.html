@@ -84,19 +84,29 @@ async function searchGeo(query) {
 }
 
 async function fetchOpenMeteo(lat, lon, tz, model) {
+  if (model === "blend") {
+    const blendModels = ["icon_seamless", "ecmwf_ifs025", "gfs_seamless"];
+    const results = await Promise.all(blendModels.map(m => {
+      const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
+        "&longitude=" + lon +
+        "&hourly=shortwave_radiation,temperature_2m" +
+        "&forecast_days=3&timezone=" + encodeURIComponent(tz) +
+        "&models=" + m;
+      return fetch(url).then(r => r.json());
+    }));
+    const times = results[0].hourly.time;
+    const ghi  = times.map((_, i) => results.reduce((s, r) => s + (r.hourly.shortwave_radiation[i] || 0), 0) / results.length);
+    const temp = times.map((_, i) => results.reduce((s, r) => s + (r.hourly.temperature_2m[i]      || 0), 0) / results.length);
+    return { tz: results[0].timezone, time: times, ghi, temp };
+  }
   const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
     "&longitude=" + lon +
     "&hourly=shortwave_radiation,temperature_2m" +
-    "&forecast_days=2&timezone=" + encodeURIComponent(tz) +
-    "&models=" + (model || "gfs_seamless");
+    "&forecast_days=3&timezone=" + encodeURIComponent(tz) +
+    "&models=" + (model || "icon_seamless");
   const r = await fetch(url);
   const d = await r.json();
-  return {
-    tz:   d.timezone,
-    time: d.hourly.time,
-    ghi:  d.hourly.shortwave_radiation,
-    temp: d.hourly.temperature_2m
-  };
+  return { tz: d.timezone, time: d.hourly.time, ghi: d.hourly.shortwave_radiation, temp: d.hourly.temperature_2m };
 }
 
 // ── SVG Chart ─────────────────────────────────────────────────────────────
@@ -139,7 +149,7 @@ function svgChart(data, inverterKw) {
 
 // ── State ─────────────────────────────────────────────────────────────────
 let state = {
-  locInput:"", locName:"", suggestions:[], model:"gem_seamless",
+  locInput:"", locName:"", suggestions:[], model:"blend",
   panelKw:11, inverterKw:12, showConfig:false,
   data:[], summary:null,
   loading:false, geoLoading:false, error:"",
@@ -160,24 +170,44 @@ function processForecast(json, tz, pKw, iKw) {
   if (!times || !ghiArr || !tempArr) throw new Error("Invalid forecast data shape");
   const now=new Date();
   const fmtDate=d=>new Intl.DateTimeFormat("en-CA",{timeZone:tz}).format(d);
-  const todayStr=fmtDate(now), tomorrowStr=fmtDate(new Date(now.getTime()+86400000));
+  const todayStr=fmtDate(now);
+  const day2Str =fmtDate(new Date(now.getTime()+86400000));
+  const day3Str =fmtDate(new Date(now.getTime()+172800000));
   const curHour=parseInt(new Intl.DateTimeFormat("en-GB",{timeZone:tz,hour:"numeric",hour12:false}).format(now));
 
-  let todayKwh=0,tomorrowKwh=0,peakOutput=0,peakHour="";
+  let todayKwh=0,day2Kwh=0,day3Kwh=0,peakOutput=0,peakHour="";
   const points=times.map((t,i)=>{
     const date=t.slice(0,10),hour=t.slice(11,16);
     const output=calcOutput(ghiArr[i],tempArr[i],pKw,iKw);
-    if(date===todayStr)    todayKwh+=output;
-    if(date===tomorrowStr) tomorrowKwh+=output;
+    if(date===todayStr) todayKwh+=output;
+    if(date===day2Str)  day2Kwh +=output;
+    if(date===day3Str)  day3Kwh +=output;
     if(output>peakOutput){ peakOutput=output; peakHour=hour; }
     return {time:hour,date,output:parseFloat(output.toFixed(3)),ghi:Math.round(ghiArr[i]),temp:Math.round(tempArr[i]),label:date.slice(5)+" "+hour};
   }).filter(p=>{
-    if(p.date===todayStr)    return parseInt(p.time)>=curHour;
-    if(p.date===tomorrowStr) return true;
+    if(p.date===todayStr) return parseInt(p.time)>=curHour;
+    if(p.date===day2Str)  return true;
+    if(p.date===day3Str)  return true;
     return false;
   });
 
-  setState({data:points, summary:{todayKwh:todayKwh.toFixed(1),tomorrowKwh:tomorrowKwh.toFixed(1),peakOutput:peakOutput.toFixed(2),peakHour}, loading:false});
+  // Load stored accuracy data
+  let accuracy = null;
+  try {
+    const stored = JSON.parse(localStorage.getItem("solar_accuracy")||"[]");
+    if(stored.length>=3){
+      const diffs = stored.map(r=>r.actual/r.predicted);
+      const avg = diffs.reduce((a,b)=>a+b,0)/diffs.length;
+      const pct = Math.abs((avg-1)*100).toFixed(0);
+      accuracy = {
+        label: "Actual runs " + pct + "% " + (avg>=1?"above":"below") + " forecast",
+        factor: avg,
+        count: stored.length
+      };
+    }
+  } catch(e){}
+
+  setState({data:points, summary:{todayKwh:todayKwh.toFixed(1),day2Kwh:day2Kwh.toFixed(1),day3Kwh:day3Kwh.toFixed(1),day2Str,day3Str,accuracy,peakOutput:peakOutput.toFixed(2),peakHour}, loading:false});
 }
 
 async function loadForecast(lat, lon, tz, pKw, iKw) {
@@ -376,9 +406,9 @@ function render() {
   if(summary&&!loading){
     root.append(el("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,padding:"16px 20px 0"}},
       ...[
-        {label:"Today",    val:summary.todayKwh,    unit:"kWh",             icon:"⚡",color:"#f59e0b"},
-        {label:"Tomorrow", val:summary.tomorrowKwh, unit:"kWh",             icon:"📅",color:"#60a5fa"},
-        {label:"Peak",     val:summary.peakOutput,  unit:summary.peakHour,  icon:"🔆",color:"#34d399"},
+        {label:"Today",    val:summary.todayKwh,   unit:"kWh", icon:"⚡", color:"#f59e0b"},
+        {label:summary.day2Str ? summary.day2Str.slice(5) : "Tomorrow", val:summary.day2Kwh, unit:"kWh", icon:"📅", color:"#60a5fa"},
+        {label:summary.day3Str ? summary.day3Str.slice(5) : "Day 3",    val:summary.day3Kwh, unit:"kWh", icon:"🗓", color:"#a78bfa"},
       ].map(c=>el("div",{style:{background:"#0f172a",border:"1px solid #1e293b",borderRadius:14,padding:"14px 12px"}},
         el("div",{style:{fontSize:16,marginBottom:4}},c.icon),
         el("div",{style:{fontSize:20,fontWeight:800,color:c.color,letterSpacing:"-0.5px"}},c.val),
@@ -395,10 +425,10 @@ function render() {
     // Model selector + TWC link
     const modelBar = el("div",{style:{padding:"0 20px 0",marginTop:16,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}});
     const models = [
-      {id:"gfs_seamless",    label:"GFS",  sub:"American"},
-      {id:"gem_seamless",    label:"GEM",  sub:"Canadian"},
-      {id:"ecmwf_ifs025",   label:"ECMWF",sub:"European"},
-      {id:"icon_seamless",   label:"ICON", sub:"German"},
+      {id:"blend",          label:"Blend", sub:"Top 3 avg"},
+      {id:"icon_seamless",  label:"ICON",  sub:"German"},
+      {id:"ecmwf_ifs025",  label:"ECMWF", sub:"European"},
+      {id:"gfs_seamless",   label:"GFS",   sub:"American"},
     ];
     models.forEach(m => {
       const active = state.model === m.id;
@@ -432,20 +462,20 @@ function render() {
     }
     root.append(modelBar);
 
-    const todayData=data.filter(d=>d.date===todayStr);
-    if(todayData.length){
+    // Show chart for all 3 days
+    if(data.length){
       root.append(el("div",{style:{padding:"18px 20px 0"}},
         el("div",{style:{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}},"Hourly output — "+locName),
         el("div",{style:{background:"#0a1628",border:"1px solid #1e293b",borderRadius:16,padding:"14px 10px 8px",overflowX:"hidden"}},
-          el("div",{html:svgChart(todayData,inverterKw)})
+          el("div",{html:svgChart(data,inverterKw)})
         )
       ));
     }
 
     root.append(el("div",{style:{padding:"18px 20px 0"}},
-      el("div",{style:{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}},"Hour-by-hour · today"),
+      el("div",{style:{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}},"Hour-by-hour · 3 days"),
       el("div",{style:{background:"#0a1628",border:"1px solid #1e293b",borderRadius:14,overflow:"hidden"}},
-        ...data.filter(d=>d.date===todayStr).map((d,i)=>{
+        ...data.map((d,i)=>{
           const sky=skyLabel(d.ghi);
           const pct=Math.min(100,(d.output/inverterKw)*100);
           return el("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderBottom:"1px solid #0f172a"}},
@@ -458,7 +488,8 @@ function render() {
             el("div",{style:{width:54,textAlign:"right",fontSize:12,fontWeight:700,color:"#f1f5f9",flexShrink:0}},d.output.toFixed(2)+" kW"),
             el("div",{style:{width:76,fontSize:9,color:sky.color,textAlign:"right",flexShrink:0}},sky.label)
           );
-        })
+          return dateHeader ? [dateHeader, row] : row;
+        }).flat()
       )
     ));
 
