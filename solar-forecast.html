@@ -121,7 +121,13 @@ let state = {
   lastLat:null, lastLon:null, lastTz:null,
   installPrompt:null
 };
-function setState(patch){state={...state,...patch};render();}
+function setState(patch){state={...state,...patch};render();
+// Auto-load Christchurch on startup
+loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
+state.locName = "Christchurch, Canterbury, New Zealand";
+state.locInput = "Christchurch, Canterbury, New Zealand";
+const inp = document.getElementById("loc-input");
+if(inp) inp.value = state.locInput;}
 
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();setState({installPrompt:e});});
 
@@ -382,7 +388,7 @@ function render() {
 
       // Day header
       root.append(el("div",{style:{margin:"20px 20px 0",display:"flex",justifyContent:"space-between",alignItems:"baseline"}},
-        el("div",{style:{fontWeight:700,fontSize:15,color:"#f1f5f9"}},DAY_NAMES[dayIdx]+" · "+dayStr.slice(5)),
+        el("div",{style:{fontWeight:700,fontSize:15,color:"#f1f5f9"}},DAY_NAMES[dayIdx]+" · "+dayStr.slice(8)+"/"+dayStr.slice(5,7)),
         el("div",{style:{fontSize:11,color:"#64748b"}},"Est. error: "+errMargin)
       ));
 
@@ -454,6 +460,12 @@ function render() {
 }
 
 render();
+// Auto-load Christchurch on startup
+loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
+state.locName = "Christchurch, Canterbury, New Zealand";
+state.locInput = "Christchurch, Canterbury, New Zealand";
+const inp = document.getElementById("loc-input");
+if(inp) inp.value = state.locInput;
 </script>
 </body>
 </html>
