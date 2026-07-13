@@ -121,13 +121,15 @@ let state = {
   lastLat:null, lastLon:null, lastTz:null,
   installPrompt:null
 };
-function setState(patch){state={...state,...patch};render();
-// Auto-load Christchurch on startup
-loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
-state.locName = "Christchurch, Canterbury, New Zealand";
+function setState(patch){state={...state,...patch};state.locName = "Christchurch, Canterbury, New Zealand";
 state.locInput = "Christchurch, Canterbury, New Zealand";
-const inp = document.getElementById("loc-input");
-if(inp) inp.value = state.locInput;}
+render();
+// Auto-load Christchurch after render so DOM is ready
+setTimeout(() => {
+  loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
+  const inp = document.getElementById("loc-input");
+  if(inp) inp.value = state.locInput;
+}, 100);}
 
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();setState({installPrompt:e});});
 
@@ -459,13 +461,15 @@ function render() {
   }
 }
 
-render();
-// Auto-load Christchurch on startup
-loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
 state.locName = "Christchurch, Canterbury, New Zealand";
 state.locInput = "Christchurch, Canterbury, New Zealand";
-const inp = document.getElementById("loc-input");
-if(inp) inp.value = state.locInput;
+render();
+// Auto-load Christchurch after render so DOM is ready
+setTimeout(() => {
+  loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
+  const inp = document.getElementById("loc-input");
+  if(inp) inp.value = state.locInput;
+}, 100);
 </script>
 </body>
 </html>
