@@ -123,13 +123,23 @@ let state = {
 };
 function setState(patch){state={...state,...patch};state.locName = "Christchurch, Canterbury, New Zealand";
 state.locInput = "Christchurch, Canterbury, New Zealand";
+state.lastLat = -43.5333;
+state.lastLon = 172.6333;
+state.lastTz = "Pacific/Auckland";
 render();
-// Auto-load Christchurch after render so DOM is ready
-setTimeout(() => {
-  loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
-  const inp = document.getElementById("loc-input");
-  if(inp) inp.value = state.locInput;
-}, 100);}
+// Auto-load Christchurch once on startup
+(async () => {
+  try {
+    state.loading = true;
+    render();
+    const json = await fetchOpenMeteo(-43.5333, 172.6333, "Pacific/Auckland", state.model);
+    processForecast(json, json.tz || "Pacific/Auckland", state.panelKw, state.inverterKw);
+  } catch(e) {
+    state.loading = false;
+    state.error = "Forecast error: " + e.message;
+    render();
+  }
+})();}
 
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();setState({installPrompt:e});});
 
@@ -463,13 +473,23 @@ function render() {
 
 state.locName = "Christchurch, Canterbury, New Zealand";
 state.locInput = "Christchurch, Canterbury, New Zealand";
+state.lastLat = -43.5333;
+state.lastLon = 172.6333;
+state.lastTz = "Pacific/Auckland";
 render();
-// Auto-load Christchurch after render so DOM is ready
-setTimeout(() => {
-  loadForecast(-43.5333, 172.6333, "Pacific/Auckland", state.panelKw, state.inverterKw);
-  const inp = document.getElementById("loc-input");
-  if(inp) inp.value = state.locInput;
-}, 100);
+// Auto-load Christchurch once on startup
+(async () => {
+  try {
+    state.loading = true;
+    render();
+    const json = await fetchOpenMeteo(-43.5333, 172.6333, "Pacific/Auckland", state.model);
+    processForecast(json, json.tz || "Pacific/Auckland", state.panelKw, state.inverterKw);
+  } catch(e) {
+    state.loading = false;
+    state.error = "Forecast error: " + e.message;
+    render();
+  }
+})();
 </script>
 </body>
 </html>
