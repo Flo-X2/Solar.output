@@ -47,6 +47,15 @@ function calcOutput(ghi, temp, panelKw, inverterKw) {
   return Math.min(Math.max(panelKw * (ghi/1000) * (1 + TEMP_COEFF*(temp-25)), 0), inverterKw);
 }
 
+function weatherIcon(ghi) {
+  if (ghi >= 700) return "☀️";
+  if (ghi >= 500) return "🌤️";
+  if (ghi >= 300) return "⛅";
+  if (ghi >= 150) return "🌥️";
+  if (ghi >= 50)  return "☁️";
+  return "🌧️";
+}
+
 function skyLabel(ghi) {
   if (ghi >= 700) return {label:"Clear sky",        color:"#f59e0b"};
   if (ghi >= 400) return {label:"Partly cloudy",    color:"#84cc16"};
@@ -57,7 +66,11 @@ function skyLabel(ghi) {
 
 // Error margins by day index based on 8-day blended model study
 const ERROR_MARGINS = ["~25%","~30%","~35%","~40%","~45%"];
-const DAY_NAMES = ["Today","Tomorrow","Day 3","Day 4","Day 5"];
+function getDayName(dayStr, idx) {
+  if (idx === 0) return "Today";
+  const date = new Date(dayStr + "T12:00:00");
+  return date.toLocaleDateString("en-GB", {weekday:"long"});
+}
 
 async function searchGeo(query) {
   const term = query.split(",")[0].trim();
@@ -393,7 +406,7 @@ function render() {
 
       // Day header
       root.append(el("div",{style:{margin:"20px 20px 0",display:"flex",justifyContent:"space-between",alignItems:"baseline"}},
-        el("div",{style:{fontWeight:700,fontSize:15,color:"#f1f5f9"}},DAY_NAMES[dayIdx]+" · "+dayStr.slice(8)+"/"+dayStr.slice(5,7)),
+        el("div",{style:{fontWeight:700,fontSize:15,color:"#f1f5f9"}},getDayName(dayStr,dayIdx)+" · "+dayStr.slice(8)+"/"+dayStr.slice(5,7)),
         el("div",{style:{fontSize:11,color:"#64748b"}},"Est. error: "+errMargin)
       ));
 
@@ -425,6 +438,7 @@ function render() {
             const pct=Math.min(100,(d.output/inverterKw)*100);
             return el("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"8px 14px",borderBottom:"1px solid #0f172a"}},
               el("div",{style:{width:36,color:"#64748b",fontSize:11,flexShrink:0}},d.time),
+              el("div",{style:{width:20,textAlign:"center",fontSize:14,flexShrink:0}},weatherIcon(d.ghi)),
               el("div",{style:{flex:1}},
                 el("div",{style:{height:5,background:"#1e293b",borderRadius:999,overflow:"hidden"}},
                   el("div",{style:{width:pct+"%",height:"100%",borderRadius:999,background:"linear-gradient(90deg,"+sky.color+",#f59e0b)"}})
